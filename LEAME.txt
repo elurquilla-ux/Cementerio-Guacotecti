@@ -1,0 +1,39 @@
+﻿CEMENTERIO GENERAL - Control de títulos y espacios
+==================================================
+
+INSTALAR
+1. Descomprima este archivo .zip (clic derecho > "Extraer todo...").
+2. Abra la carpeta extraída y haga doble clic en "Instalar".
+3. Si Windows muestra "Windows protegió su PC", haga clic en
+   "Más información" y luego en "Ejecutar de todas formas".
+   (Aparece porque el programa no tiene firma digital comercial.)
+4. La primera vez el instalador descarga los componentes del programa
+   (unos 120 MB) desde el sitio oficial y verifica que lleguen completos.
+   Necesita internet solo durante la instalación; el programa funciona
+   sin internet.
+5. Se crea un acceso directo "Cementerio General" en el escritorio
+   y en el menú Inicio. No se necesitan permisos de administrador.
+
+DÓNDE QUEDAN SUS DATOS
+  Documentos\Cementerio General\datos.json     datos actuales
+  Documentos\Cementerio General\Respaldos\     copias automáticas
+  Documentos\Cementerio General\Reportes\      Excel y PDF generados
+
+- Cada cambio se guarda en el momento; no hay botón "Guardar".
+- Al cerrar el programa se crea un respaldo con fecha y hora.
+  Se conservan los últimos 60.
+- Recomendado: en el programa, botón "Respaldos" > "Elegir carpeta",
+  y elija una carpeta de OneDrive o Google Drive, o una memoria USB.
+  Así cada respaldo también queda fuera de la computadora.
+
+ACTUALIZAR A UNA VERSIÓN NUEVA
+  Cierre el programa y ejecute "Instalar" de la versión nueva.
+  No vuelve a descargar nada y sus datos no se tocan.
+
+DESINSTALAR
+  Configuración de Windows > Aplicaciones > Aplicaciones instaladas >
+  Cementerio General > Desinstalar. Los datos en Documentos se conservan.
+
+SI YA USABA EL ARCHIVO HTML
+  Abra el archivo HTML, botón "Respaldo" > "Descargar respaldo".
+  Luego, en el programa: "Respaldos" > "Restaurar desde archivo...".

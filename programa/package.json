@@ -1,0 +1,8 @@
+{
+  "name": "cementerio-general",
+  "productName": "Cementerio General",
+  "version": "1.2.0",
+  "description": "Control interno de títulos y espacios del Cementerio General",
+  "main": "main.js",
+  "author": "Unidad de Cementerios"
+}
