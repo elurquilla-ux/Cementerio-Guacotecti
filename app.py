@@ -32,6 +32,7 @@ ADMIN_USUARIO = (os.environ.get('ADMIN_USUARIO') or 'admin').strip().lower()
 ADMIN_CLAVE = os.environ.get('ADMIN_CLAVE') or ''
 TZ = timezone(timedelta(hours=float(os.environ.get('ZONA_HORARIA', '-6'))))
 MAX_RESPALDOS = 40
+VERSION = '1.5.0'
 ROLES = ('admin', 'editor', 'lectura')
 ID_RE = re.compile(r'^[A-Za-z0-9_\-]{1,40}$')
 USER_RE = re.compile(r'^[a-z0-9._\-]{3,30}$')
@@ -268,7 +269,7 @@ def salud():
 @app.get('/api/estado')
 def estado():
     hay = int(q('SELECT COUNT(*) FROM usuarios', uno=True)[0])
-    return jsonify(usuarios=hay > 0, adminConfigurado=bool(ADMIN_CLAVE))
+    return jsonify(usuarios=hay > 0, adminConfigurado=bool(ADMIN_CLAVE), version=VERSION)
 
 
 @app.post('/api/entrar')
@@ -306,7 +307,7 @@ def yo():
     if not u:
         return jsonify(error='no_autenticado'), 401
     vacio = int(q('SELECT COUNT(*) FROM titulos WHERE borrado=0', uno=True)[0]) == 0
-    return jsonify(usuario=u['usuario'], nombre=u['nombre'], rol=u['rol'], cambiar=u['cambiar'], sinDatos=vacio)
+    return jsonify(usuario=u['usuario'], nombre=u['nombre'], rol=u['rol'], cambiar=u['cambiar'], sinDatos=vacio, version=VERSION)
 
 
 @app.post('/api/clave')
@@ -340,8 +341,19 @@ def seq_actual():
 
 
 def leer_reporte():
-    row = q("SELECT data, version FROM config WHERE clave='reporte'", uno=True)
+    return leer_config('reporte')
+
+
+def leer_config(clave):
+    row = q("SELECT data, version FROM config WHERE clave=%s", (clave,), uno=True)
     return (json.loads(row[0]), int(row[1])) if row else ({}, 0)
+
+
+def guardar_config(clave, data):
+    ver = int(q("SELECT nextval('cambios_seq')", uno=True)[0])
+    q("INSERT INTO config (clave, data, version) VALUES (%s,%s,%s) ON CONFLICT (clave) DO UPDATE SET data=EXCLUDED.data, version=EXCLUDED.version",
+      (clave, json.dumps(data, ensure_ascii=False, separators=(',', ':')), ver))
+    return ver
 
 
 @app.get('/api/datos')
@@ -354,7 +366,9 @@ def datos():
         titulos[rid] = json.loads(data)
         versiones[rid] = int(ver)
     rep, _ = leer_reporte()
-    return jsonify(titulos=titulos, versiones=versiones, reporte=rep, seq=seq)
+    croq, _ = leer_config('croquis')
+    fondo, _ = leer_config('croquis_fondo')
+    return jsonify(titulos=titulos, versiones=versiones, reporte=rep, croquis=croq, croquisFondo=fondo.get('img'), seq=seq)
 
 
 @app.get('/api/cambios')
@@ -377,6 +391,12 @@ def cambios():
     rep, rv = leer_reporte()
     if rv > desde:
         out['reporte'] = rep
+    croq, cv = leer_config('croquis')
+    if cv > desde:
+        out['croquis'] = croq
+    fondo, fv = leer_config('croquis_fondo')
+    if fv > desde:
+        out['croquisFondo'] = fondo.get('img')
     return jsonify(out)
 
 
@@ -392,8 +412,12 @@ def respaldo_diario():
 def todo_json():
     rows = q('SELECT id, data FROM titulos WHERE borrado=0 ORDER BY id', todos=True)
     rep, _ = leer_reporte()
+    croq, _ = leer_config('croquis')
+    fondo, _ = leer_config('croquis_fondo')
+    croq = dict(croq)
+    croq['fondo'] = fondo.get('img')
     return {'sistema': 'cementerio-titulos', 'version': 1, 'fecha': datetime.now(timezone.utc).isoformat(),
-            'titulos': {rid: json.loads(d) for rid, d in rows}, 'reporte': rep}
+            'titulos': {rid: json.loads(d) for rid, d in rows}, 'reporte': rep, 'croquis': croq}
 
 
 def crear_respaldo(motivo):
@@ -487,6 +511,102 @@ def guardar_reporte():
     return jsonify(ok=True, version=ver)
 
 
+# ---------------------------------------------------------------- croquis
+def _num(v, lo=-5000, hi=10000):
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v < lo or v > hi:
+        raise ValueError('valor no válido')
+    return round(float(v), 1)
+
+
+def _txt(v, n):
+    return str(v or '')[:n]
+
+
+def validar_boveda(b):
+    if not isinstance(b, dict) or not ID_RE.match(str(b.get('id', ''))):
+        raise ValueError('bóveda no válida')
+    tit = str(b.get('titulo') or '')
+    if tit and not ID_RE.match(tit):
+        raise ValueError('título no válido')
+    return {'id': str(b['id']), 'x': _num(b.get('x')), 'y': _num(b.get('y')), 'r': _num(b.get('r') or 0, -360, 360),
+            'tipo': _txt(b.get('tipo'), 30), 'etiqueta': _txt(b.get('etiqueta'), 40), 'titulo': tit,
+            'nota': _txt(b.get('nota'), 300), 'creado': _txt(b.get('creado'), 40), 'mod': _txt(b.get('mod'), 40)}
+
+
+@app.post('/api/croquis')
+@requiere(*EDITA)
+def croquis_ops():
+    d = request.get_json(silent=True) or {}
+    ops = d.get('ops')
+    if not isinstance(ops, list) or not ops or len(ops) > 200:
+        return jsonify(error='datos_no_validos'), 400
+    u = usuario_actual()
+    if any(isinstance(o, dict) and o.get('op') in ('meta', 'fondo') for o in ops) and u['rol'] != 'admin':
+        return jsonify(error='sin_permiso', mensaje='Solo un administrador puede cambiar los límites, sectores o la imagen del croquis.'), 403
+    q("INSERT INTO config (clave, data, version) VALUES ('croquis','{}',0) ON CONFLICT (clave) DO NOTHING")
+    row = q("SELECT data FROM config WHERE clave='croquis' FOR UPDATE", uno=True)
+    st = json.loads(row[0])
+    bov = st.get('bovedas') if isinstance(st.get('bovedas'), dict) else {}
+    st['bovedas'] = bov
+    cambios_bit = []
+    try:
+        for o in ops:
+            if not isinstance(o, dict):
+                raise ValueError('operación no válida')
+            op = o.get('op')
+            if op == 'put':
+                b = validar_boveda(o.get('b'))
+                antes = bov.get(b['id'])
+                if antes is None:
+                    cambios_bit.append(('agregó bóveda al croquis', b['titulo'], b['etiqueta']))
+                elif antes.get('titulo') != b['titulo']:
+                    cambios_bit.append(('cambió el título de una bóveda', b['titulo'] or antes.get('titulo', ''), b['etiqueta']))
+                bov[b['id']] = b
+                if len(bov) > 20000:
+                    raise ValueError('demasiadas bóvedas')
+            elif op == 'del':
+                bid = str(o.get('id', ''))
+                antes = bov.pop(bid, None)
+                if antes:
+                    cambios_bit.append(('quitó bóveda del croquis', antes.get('titulo', ''), antes.get('etiqueta', '')))
+            elif op == 'meta':
+                if 'limite' in o:
+                    lim = o['limite']
+                    if not isinstance(lim, list) or not 3 <= len(lim) <= 500:
+                        raise ValueError('límite no válido')
+                    st['limite'] = [[_num(p[0]), _num(p[1])] for p in lim]
+                if 'cortes' in o:
+                    cs = o['cortes']
+                    if not isinstance(cs, list) or len(cs) > 20:
+                        raise ValueError('divisiones no válidas')
+                    st['cortes'] = [[_num(c[0]), _num(c[1]), _num(c[2]), _num(c[3])] for c in cs]
+                if 'nombres' in o:
+                    ns = o['nombres']
+                    if not isinstance(ns, list) or len(ns) > 21:
+                        raise ValueError('nombres no válidos')
+                    st['nombres'] = [_txt(n, 20) for n in ns]
+                if 'tam' in o:
+                    st['tam'] = _num(o['tam'], 4, 60)
+                cambios_bit.append(('modificó límites o sectores del croquis', '', ''))
+            elif op == 'fondo':
+                img = o.get('img')
+                if img is not None and (not isinstance(img, str) or not img.startswith('data:image/') or len(img) > 4000000):
+                    raise ValueError('imagen no válida')
+                guardar_config('croquis_fondo', {'img': img})
+                cambios_bit.append(('cambió la imagen de fondo del croquis', '', ''))
+            else:
+                raise ValueError('operación no válida')
+    except (ValueError, TypeError, IndexError, KeyError) as e:
+        db().rollback()
+        return jsonify(error='datos_no_validos', mensaje='No se pudo guardar el croquis: ' + str(e)), 400
+    respaldo_diario()
+    ver = guardar_config('croquis', st)
+    for acc, tid, det in cambios_bit[:20]:
+        bitacora(acc, tid, det)
+    db().commit()
+    return jsonify(ok=True, version=ver)
+
+
 # ---------------------------------------------------------------- respaldos e importación
 def descarga(obj, nombre):
     datos = json.dumps(obj, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
@@ -530,6 +650,11 @@ def reemplazar_todo(obj, motivo):
         v = int(cur.fetchone()[0])
         cur.execute("INSERT INTO config (clave, data, version) VALUES ('reporte',%s,%s) ON CONFLICT (clave) DO UPDATE SET data=EXCLUDED.data, version=EXCLUDED.version",
                     (json.dumps(obj['reporte'], ensure_ascii=False, separators=(',', ':')), v))
+    if isinstance(obj.get('croquis'), dict):
+        croq = dict(obj['croquis'])
+        img = croq.pop('fondo', None)
+        guardar_config('croquis', croq)
+        guardar_config('croquis_fondo', {'img': img if isinstance(img, str) and img.startswith('data:image/') else None})
     return len(titulos)
 
 
@@ -673,6 +798,18 @@ def ver_bitacora():
             return jsonify(error='sin_permiso'), 403
         rows = q('SELECT fecha, usuario, accion, titulo_id, detalle FROM bitacora ORDER BY id DESC LIMIT 300', todos=True)
     return jsonify(bitacora=[{'fecha': int(r[0]), 'usuario': r[1], 'accion': r[2], 'titulo': r[3], 'detalle': r[4]} for r in rows])
+
+
+@app.errorhandler(404)
+def no_existe(e):
+    if request.path.startswith('/api/'):
+        return jsonify(error='no_existe', mensaje='Esa función no existe en el servidor.'), 404
+    return 'No encontrado', 404
+
+
+@app.errorhandler(500)
+def error_interno(e):
+    return jsonify(error='error_servidor', mensaje='Ocurrió un error en el servidor. Si se repite, revise los registros (logs) en Railway.'), 500
 
 
 @app.errorhandler(413)
