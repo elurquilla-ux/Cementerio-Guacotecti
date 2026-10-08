@@ -32,7 +32,7 @@ ADMIN_USUARIO = (os.environ.get('ADMIN_USUARIO') or 'admin').strip().lower()
 ADMIN_CLAVE = os.environ.get('ADMIN_CLAVE') or ''
 TZ = timezone(timedelta(hours=float(os.environ.get('ZONA_HORARIA', '-6'))))
 MAX_RESPALDOS = 40
-VERSION = '1.5.0'
+VERSION = '1.6.0'
 ROLES = ('admin', 'editor', 'lectura')
 ID_RE = re.compile(r'^[A-Za-z0-9_\-]{1,40}$')
 USER_RE = re.compile(r'^[a-z0-9._\-]{3,30}$')
@@ -132,6 +132,16 @@ CREATE TABLE IF NOT EXISTS bitacora (
   detalle TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS bitacora_titulo ON bitacora(titulo_id);
+CREATE TABLE IF NOT EXISTS formularios (
+  id TEXT PRIMARY KEY,
+  numero TEXT NOT NULL DEFAULT '',
+  data TEXT NOT NULL,
+  version BIGINT NOT NULL,
+  borrado SMALLINT NOT NULL DEFAULT 0,
+  creado BIGINT NOT NULL DEFAULT 0,
+  modificado BIGINT NOT NULL DEFAULT 0,
+  modificado_por TEXT NOT NULL DEFAULT ''
+);
 """
 
 _init_lock = threading.Lock()
@@ -416,8 +426,12 @@ def todo_json():
     fondo, _ = leer_config('croquis_fondo')
     croq = dict(croq)
     croq['fondo'] = fondo.get('img')
+    frows = q('SELECT id, numero, data, creado, modificado, modificado_por FROM formularios WHERE borrado=0 ORDER BY creado', todos=True)
+    forms = [{'id': r[0], 'numero': r[1], 'datos': json.loads(r[2]), 'creado': int(r[3]), 'modificado': int(r[4]), 'por': r[5]} for r in frows]
+    lay, _ = leer_config('formulario')
     return {'sistema': 'cementerio-titulos', 'version': 1, 'fecha': datetime.now(timezone.utc).isoformat(),
-            'titulos': {rid: json.loads(d) for rid, d in rows}, 'reporte': rep, 'croquis': croq}
+            'titulos': {rid: json.loads(d) for rid, d in rows}, 'reporte': rep, 'croquis': croq,
+            'formularios': forms, 'formularioAjustes': lay}
 
 
 def crear_respaldo(motivo):
@@ -607,6 +621,74 @@ def croquis_ops():
     return jsonify(ok=True, version=ver)
 
 
+# ---------------------------------------------------------------- formularios (módulo independiente)
+def fila_form(r):
+    return {'id': r[0], 'numero': r[1], 'datos': json.loads(r[2]), 'version': int(r[3]), 'creado': int(r[4]), 'modificado': int(r[5]), 'por': r[6]}
+
+
+@app.get('/api/formularios')
+@requiere()
+def formularios():
+    rows = q('SELECT id, numero, data, version, creado, modificado, modificado_por FROM formularios WHERE borrado=0 ORDER BY modificado DESC', todos=True)
+    lay, _ = leer_config('formulario')
+    return jsonify(formularios=[fila_form(r) for r in rows], layout=lay)
+
+
+@app.put('/api/formularios/<fid>')
+@requiere(*EDITA)
+def guardar_formulario(fid):
+    if not ID_RE.match(fid):
+        return jsonify(error='id_no_valido'), 400
+    d = request.get_json(silent=True) or {}
+    datos = d.get('datos')
+    if not isinstance(datos, dict) or len(datos) > 100:
+        return jsonify(error='datos_no_validos'), 400
+    datos = {str(k)[:40]: str(v)[:300] for k, v in datos.items()}
+    numero = str(d.get('numero', '')).strip()[:30]
+    if not numero:
+        return jsonify(error='numero', mensaje='Escriba el N° impreso en la hoja del formulario.'), 400
+    u = usuario_actual()
+    t = ahora_ms()
+    ver = int(q("SELECT nextval('cambios_seq')", uno=True)[0])
+    existe = q('SELECT 1 FROM formularios WHERE id=%s AND borrado=0', (fid,), uno=True)
+    q('INSERT INTO formularios (id, numero, data, version, borrado, creado, modificado, modificado_por) VALUES (%s,%s,%s,%s,0,%s,%s,%s) '
+      'ON CONFLICT (id) DO UPDATE SET numero=EXCLUDED.numero, data=EXCLUDED.data, version=EXCLUDED.version, borrado=0, '
+      'modificado=EXCLUDED.modificado, modificado_por=EXCLUDED.modificado_por',
+      (fid, numero, json.dumps(datos, ensure_ascii=False), ver, t, t, u['nombre']))
+    bitacora(('editó' if existe else 'emitió') + ' formulario de título de puesto', '', 'N° ' + numero + ' · ' + datos.get('favor1', '')[:80])
+    db().commit()
+    return jsonify(ok=True, version=ver, modificado=t, por=u['nombre'])
+
+
+@app.delete('/api/formularios/<fid>')
+@requiere(*EDITA)
+def borrar_formulario(fid):
+    row = q('SELECT numero FROM formularios WHERE id=%s AND borrado=0', (fid,), uno=True)
+    if row:
+        ver = int(q("SELECT nextval('cambios_seq')", uno=True)[0])
+        q('UPDATE formularios SET borrado=1, version=%s, modificado=%s, modificado_por=%s WHERE id=%s', (ver, ahora_ms(), usuario_actual()['nombre'], fid))
+        bitacora('eliminó formulario de título de puesto', '', 'N° ' + row[0])
+        db().commit()
+    return jsonify(ok=True)
+
+
+@app.put('/api/config/formulario')
+@requiere('admin')
+def guardar_ajustes_formulario():
+    d = request.get_json(silent=True) or {}
+    data = d.get('data')
+    if not isinstance(data, dict):
+        return jsonify(error='datos_no_validos'), 400
+    limpio = {'dx': float(data.get('dx') or 0), 'dy': float(data.get('dy') or 0), 'fuente': float(data.get('fuente') or 10), 'campos': {}}
+    for k, v in (data.get('campos') or {}).items():
+        if isinstance(v, dict) and len(limpio['campos']) < 200:
+            limpio['campos'][str(k)[:40]] = {'dx': float(v.get('dx') or 0), 'dy': float(v.get('dy') or 0)}
+    guardar_config('formulario', limpio)
+    bitacora('ajustó posiciones de impresión del formulario')
+    db().commit()
+    return jsonify(ok=True)
+
+
 # ---------------------------------------------------------------- respaldos e importación
 def descarga(obj, nombre):
     datos = json.dumps(obj, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
@@ -655,6 +737,20 @@ def reemplazar_todo(obj, motivo):
         img = croq.pop('fondo', None)
         guardar_config('croquis', croq)
         guardar_config('croquis_fondo', {'img': img if isinstance(img, str) and img.startswith('data:image/') else None})
+    if isinstance(obj.get('formularios'), list):
+        cur.execute("SELECT nextval('cambios_seq')")
+        v = int(cur.fetchone()[0])
+        cur.execute('UPDATE formularios SET borrado=1, version=%s WHERE borrado=0', (v,))
+        for f in obj['formularios'][:50000]:
+            if not isinstance(f, dict) or not ID_RE.match(str(f.get('id', ''))) or not isinstance(f.get('datos'), dict):
+                continue
+            cur.execute('INSERT INTO formularios (id, numero, data, version, borrado, creado, modificado, modificado_por) VALUES (%s,%s,%s,%s,0,%s,%s,%s) '
+                        'ON CONFLICT (id) DO UPDATE SET numero=EXCLUDED.numero, data=EXCLUDED.data, version=EXCLUDED.version, borrado=0, '
+                        'modificado=EXCLUDED.modificado, modificado_por=EXCLUDED.modificado_por',
+                        (str(f['id']), str(f.get('numero', ''))[:30], json.dumps(f['datos'], ensure_ascii=False), v,
+                         int(f.get('creado') or 0), int(f.get('modificado') or 0), str(f.get('por', ''))[:80]))
+    if isinstance(obj.get('formularioAjustes'), dict):
+        guardar_config('formulario', obj['formularioAjustes'])
     return len(titulos)
 
 
