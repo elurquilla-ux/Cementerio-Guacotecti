@@ -32,7 +32,7 @@ ADMIN_USUARIO = (os.environ.get('ADMIN_USUARIO') or 'admin').strip().lower()
 ADMIN_CLAVE = os.environ.get('ADMIN_CLAVE') or ''
 TZ = timezone(timedelta(hours=float(os.environ.get('ZONA_HORARIA', '-6'))))
 MAX_RESPALDOS = 40
-VERSION = '1.6.1'
+VERSION = '1.6.2'
 ROLES = ('admin', 'editor', 'lectura')
 ID_RE = re.compile(r'^[A-Za-z0-9_\-]{1,40}$')
 USER_RE = re.compile(r'^[a-z0-9._\-]{3,30}$')
@@ -716,7 +716,8 @@ def guardar_ajustes_formulario():
     data = d.get('data')
     if not isinstance(data, dict):
         return jsonify(error='datos_no_validos'), 400
-    limpio = {'dx': float(data.get('dx') or 0), 'dy': float(data.get('dy') or 0), 'fuente': float(data.get('fuente') or 10), 'campos': {}}
+    limpio = {'dx': float(data.get('dx') or 0), 'dy': float(data.get('dy') or 0), 'fuente': float(data.get('fuente') or 10), 'campos': {},
+              'plantilla': str(data.get('plantilla') or '')[:10]}
     for k, v in (data.get('campos') or {}).items():
         if isinstance(v, dict) and len(limpio['campos']) < 200:
             limpio['campos'][str(k)[:40]] = {'dx': float(v.get('dx') or 0), 'dy': float(v.get('dy') or 0)}
