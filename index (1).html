@@ -2778,7 +2778,7 @@ async function loadAll(){
   CROQ=croqMerge(Object.assign({},d.croquis||{},{fondo:d.croquisFondo||null}));
   ingest(); if(!$('#viewReportes').hidden) repRender(); if(!$('#viewCroquis').hidden) croqRenderAll();
 }
-const APP_VERSION='1.6.0';
+const APP_VERSION='1.6.1';
 function cmpVer(a,b){const x=String(a||'0').split('.').map(Number),y=String(b||'0').split('.').map(Number);for(let i=0;i<3;i++){const d=(x[i]||0)-(y[i]||0);if(d)return d;}return 0;}
 function avisoVersion(v){
   let b=document.getElementById('avisoVer');

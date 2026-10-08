@@ -32,7 +32,7 @@ ADMIN_USUARIO = (os.environ.get('ADMIN_USUARIO') or 'admin').strip().lower()
 ADMIN_CLAVE = os.environ.get('ADMIN_CLAVE') or ''
 TZ = timezone(timedelta(hours=float(os.environ.get('ZONA_HORARIA', '-6'))))
 MAX_RESPALDOS = 40
-VERSION = '1.6.0'
+VERSION = '1.6.1'
 ROLES = ('admin', 'editor', 'lectura')
 ID_RE = re.compile(r'^[A-Za-z0-9_\-]{1,40}$')
 USER_RE = re.compile(r'^[a-z0-9._\-]{3,30}$')
@@ -159,14 +159,13 @@ def inicializar():
         c = conectar()
         try:
             cur = c.cursor()
-            cur.execute('SELECT pg_advisory_lock(424242)')
+            cur.execute('SELECT pg_advisory_xact_lock(424242)')
             for stmt in [s.strip() for s in ESQUEMA.split(';') if s.strip()]:
                 cur.execute(stmt)
             cur.execute('SELECT COUNT(*) FROM usuarios')
             if int(cur.fetchone()[0]) == 0 and ADMIN_CLAVE:
                 cur.execute('INSERT INTO usuarios (usuario, nombre, clave, rol, cambiar, creado) VALUES (%s,%s,%s,%s,1,%s)',
                             (ADMIN_USUARIO, 'Administrador', generate_password_hash(ADMIN_CLAVE), 'admin', ahora_ms()))
-            cur.execute('SELECT pg_advisory_unlock(424242)')
             c.commit()
             _init_ok = True
         finally:
@@ -259,11 +258,48 @@ def bitacora(accion, titulo_id='', detalle=''):
       (ahora_ms(), u['nombre'] if u else '', accion, titulo_id or '', detalle[:500]))
 
 
+def _ver_tupla(v):
+    try:
+        return tuple(int(x) for x in v.split('.'))
+    except Exception:
+        return (0,)
+
+
+def pagina_mas_reciente():
+    """Busca la página del sistema (index.html, o copias como 'index (1).html') en la carpeta static
+    y en la raíz, y usa la de versión más nueva. Así no importa dónde ni con qué nombre se subió."""
+    mejor = (None, None, (-1,), -1)
+    for carpeta in (os.path.join(BASE_DIR, 'static'), BASE_DIR):
+        try:
+            nombres = os.listdir(carpeta)
+        except OSError:
+            continue
+        for n in nombres:
+            if not n.lower().endswith('.html'):
+                continue
+            ruta = os.path.join(carpeta, n)
+            try:
+                with open(ruta, 'r', encoding='utf-8', errors='ignore') as fh:
+                    txt = fh.read()
+            except OSError:
+                continue
+            m = re.search(r"const APP_VERSION='([0-9.]+)'", txt)
+            if not m and 'CEMENTERIO' not in txt.upper():
+                continue
+            ver = _ver_tupla(m.group(1)) if m else (0,)
+            mt = os.path.getmtime(ruta)
+            if (ver, mt) > (mejor[2], mejor[3]):
+                mejor = (carpeta, n, ver, mt)
+    return mejor[0], mejor[1]
+
+
 # ---------------------------------------------------------------- páginas
 @app.route('/')
 def inicio():
-    carpeta = os.path.join(BASE_DIR, 'static') if os.path.exists(os.path.join(BASE_DIR, 'static', 'index.html')) else BASE_DIR
-    resp = send_from_directory(carpeta, 'index.html')
+    carpeta, nombre = pagina_mas_reciente()
+    if not nombre:
+        return Response('No se encontró index.html en el repositorio de GitHub.', 500, mimetype='text/plain; charset=utf-8')
+    resp = send_from_directory(carpeta, nombre)
     resp.headers['Cache-Control'] = 'no-cache'
     resp.headers['Content-Security-Policy'] = ("default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
                                                "img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'")
@@ -407,6 +443,7 @@ def cambios():
     fondo, fv = leer_config('croquis_fondo')
     if fv > desde:
         out['croquisFondo'] = fondo.get('img')
+    out['version'] = VERSION
     return jsonify(out)
 
 
