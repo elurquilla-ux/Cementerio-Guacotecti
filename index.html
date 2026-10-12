@@ -295,6 +295,8 @@ table.mini tr.nota td{color:var(--muted);font-size:12.5px;padding-top:0;border-t
 .doc.ec .firmas{display:flex;justify-content:space-around;gap:30px;margin:34px 0 6px;font-size:12.5px;text-align:center}
 .doc.ec .firmas div{flex:1;max-width:240px}
 .doc.ec .firmas span{display:block;border-top:1px solid #000;margin-bottom:4px}
+.doc.ec .ec-obs{border:1px solid #999;padding:4px 10px;font-size:12.5px;break-inside:avoid}
+.doc.ec .ec-obs p{margin:4px 0;white-space:normal}
 .doc.ec .pie{margin-top:14px;text-align:center}
 @media print{ .doc.ec .saldo.debe{background:transparent} .doc.ec{zoom:.9} }
 .money-in{display:flex;gap:6px}
@@ -1837,8 +1839,10 @@ function ecDoc(r){
       otros.map(o=>'<tr><td style="text-align:left">'+esc(o[0])+'</td><td>'+esc(fmtDate(o[1])||o[1]||'—')+'</td><td>'+esc(o[2]||'—')+'</td><td class="r">'+esc(o[3]||'—')+'</td></tr>').join('')+
       (()=>{const t=otros.reduce((a,o)=>{const n=parseFloat(String(o[3]).replace('$',''));return a+(n>0?n:0);},0);return t?'<tr class="tot"><td colspan="3">Total pagado en servicios</td><td class="r">'+money(t)+'</td></tr>':'';})()+'</tbody></table>';
   }
+  const obs=[r.observaciones,r.notaExtra].map(t=>String(t||'').trim()).filter(Boolean);
+  if(obs.length) h+='<h4>Observaciones</h4><div class="ec-obs">'+obs.map(t=>'<p>'+esc(t).replace(/\n/g,'<br>')+'</p>').join('')+'</div>';
   h+='<div class="saldo'+(p.saldo?' debe':'')+'">'+(p.saldo?'Saldo pendiente al '+esc(fmtDate(hoy))+': <b>'+money(p.saldo)+'</b>':(p.ini&&p.k!=='noaplica'?'Sin saldo pendiente · cubierto hasta el '+esc(fmtDate(p.hasta)):'Sin saldo pendiente'))+'</div>';
-  h+='<div class="firmas"><div><span></span>Encargado(a) de Cementerio</div><div><span></span>Sello</div></div>';
+  h+='<div class="firmas"><div><span></span>Dirección Municipal</div></div>';
   h+='<p class="sm pie">Documento generado el '+esc(fmtDate(hoy)+' a las '+new Date().toTimeString().slice(0,5))+'. El enterramiento incluye los primeros '+c.anos+' años; después se cobra prórroga en períodos de '+c.anos+' años a '+money(c.precio)+' cada uno.</p>';
   h+='</div></div>';
   return h;
@@ -2783,7 +2787,7 @@ async function loadAll(){
   CROQ=croqMerge(Object.assign({},d.croquis||{},{fondo:d.croquisFondo||null}));
   ingest(); if(!$('#viewReportes').hidden) repRender(); if(!$('#viewCroquis').hidden) croqRenderAll();
 }
-const APP_VERSION='1.6.2';
+const APP_VERSION='1.6.3';
 function cmpVer(a,b){const x=String(a||'0').split('.').map(Number),y=String(b||'0').split('.').map(Number);for(let i=0;i<3;i++){const d=(x[i]||0)-(y[i]||0);if(d)return d;}return 0;}
 function avisoVersion(v){
   let b=document.getElementById('avisoVer');
