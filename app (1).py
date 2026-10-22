@@ -32,7 +32,7 @@ ADMIN_USUARIO = (os.environ.get('ADMIN_USUARIO') or 'admin').strip().lower()
 ADMIN_CLAVE = os.environ.get('ADMIN_CLAVE') or ''
 TZ = timezone(timedelta(hours=float(os.environ.get('ZONA_HORARIA', '-6'))))
 MAX_RESPALDOS = 40
-VERSION = '1.6.0'
+VERSION = '1.6.5'
 ROLES = ('admin', 'editor', 'lectura')
 ID_RE = re.compile(r'^[A-Za-z0-9_\-]{1,40}$')
 USER_RE = re.compile(r'^[a-z0-9._\-]{3,30}$')
@@ -258,11 +258,48 @@ def bitacora(accion, titulo_id='', detalle=''):
       (ahora_ms(), u['nombre'] if u else '', accion, titulo_id or '', detalle[:500]))
 
 
+def _ver_tupla(v):
+    try:
+        return tuple(int(x) for x in v.split('.'))
+    except Exception:
+        return (0,)
+
+
+def pagina_mas_reciente():
+    """Busca la página del sistema (index.html, o copias como 'index (1).html') en la carpeta static
+    y en la raíz, y usa la de versión más nueva. Así no importa dónde ni con qué nombre se subió."""
+    mejor = (None, None, (-1,), -1)
+    for carpeta in (os.path.join(BASE_DIR, 'static'), BASE_DIR):
+        try:
+            nombres = os.listdir(carpeta)
+        except OSError:
+            continue
+        for n in nombres:
+            if not n.lower().endswith('.html'):
+                continue
+            ruta = os.path.join(carpeta, n)
+            try:
+                with open(ruta, 'r', encoding='utf-8', errors='ignore') as fh:
+                    txt = fh.read()
+            except OSError:
+                continue
+            m = re.search(r"const APP_VERSION='([0-9.]+)'", txt)
+            if not m and 'CEMENTERIO' not in txt.upper():
+                continue
+            ver = _ver_tupla(m.group(1)) if m else (0,)
+            mt = os.path.getmtime(ruta)
+            if (ver, mt) > (mejor[2], mejor[3]):
+                mejor = (carpeta, n, ver, mt)
+    return mejor[0], mejor[1]
+
+
 # ---------------------------------------------------------------- páginas
 @app.route('/')
 def inicio():
-    carpeta = os.path.join(BASE_DIR, 'static') if os.path.exists(os.path.join(BASE_DIR, 'static', 'index.html')) else BASE_DIR
-    resp = send_from_directory(carpeta, 'index.html')
+    carpeta, nombre = pagina_mas_reciente()
+    if not nombre:
+        return Response('No se encontró index.html en el repositorio de GitHub.', 500, mimetype='text/plain; charset=utf-8')
+    resp = send_from_directory(carpeta, nombre)
     resp.headers['Cache-Control'] = 'no-cache'
     resp.headers['Content-Security-Policy'] = ("default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
                                                "img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'")
@@ -679,7 +716,8 @@ def guardar_ajustes_formulario():
     data = d.get('data')
     if not isinstance(data, dict):
         return jsonify(error='datos_no_validos'), 400
-    limpio = {'dx': float(data.get('dx') or 0), 'dy': float(data.get('dy') or 0), 'fuente': float(data.get('fuente') or 10), 'campos': {}}
+    limpio = {'dx': float(data.get('dx') or 0), 'dy': float(data.get('dy') or 0), 'fuente': float(data.get('fuente') or 10), 'campos': {},
+              'plantilla': str(data.get('plantilla') or '')[:10]}
     for k, v in (data.get('campos') or {}).items():
         if isinstance(v, dict) and len(limpio['campos']) < 200:
             limpio['campos'][str(k)[:40]] = {'dx': float(v.get('dx') or 0), 'dy': float(v.get('dy') or 0)}
